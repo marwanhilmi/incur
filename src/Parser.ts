@@ -1,3 +1,4 @@
+import fsSync from 'node:fs'
 import type { z } from 'zod'
 
 import type { FieldError } from './Errors.js'
@@ -109,6 +110,60 @@ export function parse<
   const parsedOptions = optionsSchema ? zodParse(optionsSchema, rawOptions) : {}
 
   return { args, options: parsedOptions } as parse.ReturnType<args, options>
+}
+
+/** Parses a command options object against a Zod schema. */
+export function parseOptions<const options extends z.ZodObject<any>>(
+  schema: options,
+  data: Record<string, unknown>,
+): z.output<options> {
+  return zodParse(schema, data) as z.output<options>
+}
+
+/** Parses a JSON config file keyed by command path to options objects. */
+export function parseConfig(path: string): parseConfig.ReturnType {
+  let raw = ''
+  try {
+    raw = fsSync.readFileSync(path, 'utf8')
+  } catch (cause: any) {
+    throw new ParseError({
+      message: `Failed to read config file: ${path}`,
+      cause: cause instanceof Error ? cause : undefined,
+    })
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (cause: any) {
+    throw new ParseError({
+      message: `Invalid JSON in config file: ${path}`,
+      cause: cause instanceof Error ? cause : undefined,
+    })
+  }
+
+  if (!isRecord(parsed))
+    throw new ParseError({ message: `Config file must be an object: ${path}` })
+
+  const config: Record<string, Record<string, unknown>> = {}
+  for (const [name, value] of Object.entries(parsed)) {
+    if (!isRecord(value))
+      throw new ParseError({
+        message: `Config entry for command '${name}' must be an object`,
+      })
+    config[name] = value
+  }
+
+  return config
+}
+
+export declare namespace parseConfig {
+  /** Parsed config keyed by command path. */
+  type ReturnType = Record<
+    string,
+    /** Option values for a command. */
+    Record<string, unknown>
+  >
 }
 
 export declare namespace parse {
@@ -234,6 +289,11 @@ function coerce(value: unknown, name: string, schema: z.ZodObject<any>): unknown
     return value === 'true'
   }
   return value
+}
+
+/** Returns true when `value` is a plain object record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Returns the best available env source for the current runtime. */

@@ -43,3 +43,8 @@ test('narrows both args and options together', () => {
   expectTypeOf(result.args).toEqualTypeOf<{ repo: string }>()
   expectTypeOf(result.options).toEqualTypeOf<{ limit: number }>()
 })
+
+test('parseConfig returns command-keyed option objects', () => {
+  const result = Parser.parseConfig('incur.config.json')
+  expectTypeOf(result).toEqualTypeOf<Record<string, Record<string, unknown>>>()
+})

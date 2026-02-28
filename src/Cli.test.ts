@@ -1,3 +1,6 @@
+import { rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Cli, Errors, z } from 'incur'
 
 const originalIsTTY = process.stdout.isTTY
@@ -35,6 +38,12 @@ async function serve(
     output: output.replace(/duration: \d+ms/, 'duration: <stripped>'),
     exitCode,
   }
+}
+
+function configPath(content: string): string {
+  const path = join(tmpdir(), `incur-config-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+  writeFileSync(path, content)
+  return path
 }
 
 describe('create', () => {
@@ -364,6 +373,170 @@ describe('serve', () => {
     const parsed = JSON.parse(output)
     expect(parsed.code).toBe('UNKNOWN')
     expect(parsed.message).toBe('boom')
+  })
+
+  test('merges command options from --config file', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+        dryRun: z.boolean().default(false),
+      }),
+      run(c) {
+        return { branch: c.options.branch, dryRun: c.options.dryRun }
+      },
+    })
+
+    const path = configPath(JSON.stringify({ deploy: { branch: 'release', dryRun: true } }))
+    const { output } = await serve(cli, ['deploy', '--config', path])
+    rmSync(path, { force: true })
+
+    expect(output).toMatchInlineSnapshot(`
+      "branch: release
+      dryRun: true
+      "
+    `)
+  })
+
+  test('CLI options override config options', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+        dryRun: z.boolean().default(false),
+      }),
+      run(c) {
+        return { branch: c.options.branch, dryRun: c.options.dryRun }
+      },
+    })
+
+    const path = configPath(JSON.stringify({ deploy: { branch: 'release', dryRun: true } }))
+    const { output } = await serve(cli, ['deploy', '--config', path, '--branch', 'hotfix'])
+    rmSync(path, { force: true })
+
+    expect(output).toMatchInlineSnapshot(`
+      "branch: hotfix
+      dryRun: true
+      "
+    `)
+  })
+
+  test('config values override schema defaults when flag is omitted', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+      }),
+      run(c) {
+        return { branch: c.options.branch }
+      },
+    })
+
+    const path = configPath(JSON.stringify({ deploy: { branch: 'release' } }))
+    const { output } = await serve(cli, ['deploy', '--config', path])
+    rmSync(path, { force: true })
+
+    expect(output).toMatchInlineSnapshot(`
+      "branch: release
+      "
+    `)
+  })
+
+  test('config for other commands is ignored', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+      }),
+      run(c) {
+        return { branch: c.options.branch }
+      },
+    })
+
+    const path = configPath(JSON.stringify({ ping: { branch: 'release' } }))
+    const { output } = await serve(cli, ['deploy', '--config', path])
+    rmSync(path, { force: true })
+
+    expect(output).toMatchInlineSnapshot(`
+      "branch: main
+      "
+    `)
+  })
+
+  test('root command can read config by CLI name key', async () => {
+    const cli = Cli.create('ping', {
+      options: z.object({
+        loud: z.boolean().default(false),
+      }),
+      run(c) {
+        return { loud: c.options.loud }
+      },
+    })
+
+    const path = configPath(JSON.stringify({ ping: { loud: true } }))
+    const { output } = await serve(cli, ['--config', path])
+    rmSync(path, { force: true })
+
+    expect(output).toMatchInlineSnapshot(`
+      "loud: true
+      "
+    `)
+  })
+
+  test('missing --config file returns parse-style error', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+      }),
+      run() {
+        return { ok: true }
+      },
+    })
+
+    const path = join(tmpdir(), `incur-missing-config-${Date.now()}.json`)
+    const { output, exitCode } = await serve(cli, ['deploy', '--config', path])
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain('Failed to read config file')
+  })
+
+  test('invalid config JSON returns parse-style error', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+      }),
+      run() {
+        return { ok: true }
+      },
+    })
+
+    const path = configPath('{invalid')
+    const { output, exitCode } = await serve(cli, ['deploy', '--config', path])
+    rmSync(path, { force: true })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain('Invalid JSON in config file')
+  })
+
+  test('unknown config option returns parse-style error', async () => {
+    const cli = Cli.create('test')
+    cli.command('deploy', {
+      options: z.object({
+        branch: z.string().default('main'),
+      }),
+      run() {
+        return { ok: true }
+      },
+    })
+
+    const path = configPath(JSON.stringify({ deploy: { nope: true } }))
+    const { output, exitCode } = await serve(cli, ['deploy', '--config', path])
+    rmSync(path, { force: true })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain("Unknown option in config for 'deploy': nope")
   })
 })
 
@@ -721,6 +894,7 @@ describe('subcommands', () => {
         list
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1154,6 +1328,7 @@ describe('help', () => {
         skills add  Sync skill files to your agent
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1186,6 +1361,7 @@ describe('help', () => {
         skills add  Sync skill files to your agent
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1215,6 +1391,7 @@ describe('help', () => {
         name  Name
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1244,6 +1421,7 @@ describe('help', () => {
         list  List PRs
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1283,6 +1461,7 @@ describe('help', () => {
         skills add  Sync skill files to your agent
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1310,6 +1489,7 @@ describe('help', () => {
       Run "tool status" to check deployment progress.
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -1404,6 +1584,7 @@ describe('env', () => {
         API_URL    API URL (default: https://api.example.com)
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest

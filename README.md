@@ -588,9 +588,27 @@ Every incur CLI includes these flags automatically:
 | `--version`      | Print CLI version                            |
 | `--llms`         | Output agent-readable command manifest       |
 | `--mcp`          | Start as an MCP stdio server                 |
+| `--config <path>` | Load command options from a JSON config file |
 | `--json`         | Shorthand for `--format json`                |
 | `--format <fmt>` | Output format: `toon`, `json`, `yaml`, `md`  |
 | `--verbose`      | Include full envelope (`ok`, `data`, `meta`) |
+
+Config file keys are command paths (for example `"deploy"` or `"project deploy create"`), and values are option objects:
+
+```json
+{
+  "deploy": { "branch": "main", "dryRun": true },
+  "project deploy create": { "branch": "release" }
+}
+```
+
+Use with:
+
+```sh
+my-cli deploy --config ./incur.config.json --branch hotfix
+```
+
+CLI flags take precedence over config values.
 
 ## API Reference
 

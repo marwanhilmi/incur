@@ -1,0 +1,11 @@
+{
+  "deploy": {
+    "branch": "release",
+    "dryRun": true,
+    "retries": 3
+  },
+  "project create": {
+    "region": "eu",
+    "private": true
+  }
+}

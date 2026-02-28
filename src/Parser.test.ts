@@ -1,3 +1,6 @@
+import { rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Parser, z } from 'incur'
 
 describe('parse', () => {
@@ -114,5 +117,53 @@ describe('parse', () => {
     })
     expect(result.args).toEqual({ repo: 'myrepo' })
     expect(result.options).toEqual({ limit: 5 })
+  })
+})
+
+describe('parseConfig', () => {
+  test('parses a valid JSON config file', () => {
+    const path = join(tmpdir(), `incur-config-${Date.now()}.json`)
+    writeFileSync(
+      path,
+      JSON.stringify({ ping: { loud: true }, 'project deploy': { branch: 'main' } }),
+    )
+
+    const result = Parser.parseConfig(path)
+    rmSync(path, { force: true })
+
+    expect(result).toEqual({
+      ping: { loud: true },
+      'project deploy': { branch: 'main' },
+    })
+  })
+
+  test('throws ParseError for invalid JSON', () => {
+    const path = join(tmpdir(), `incur-config-${Date.now()}.json`)
+    writeFileSync(path, '{invalid')
+
+    expect(() => Parser.parseConfig(path)).toThrow(
+      expect.objectContaining({ name: 'Incur.ParseError' }),
+    )
+    rmSync(path, { force: true })
+  })
+
+  test('throws ParseError when top-level value is not an object', () => {
+    const path = join(tmpdir(), `incur-config-${Date.now()}.json`)
+    writeFileSync(path, JSON.stringify(['not-an-object']))
+
+    expect(() => Parser.parseConfig(path)).toThrow(
+      expect.objectContaining({ name: 'Incur.ParseError' }),
+    )
+    rmSync(path, { force: true })
+  })
+
+  test('throws ParseError when a command entry is not an object', () => {
+    const path = join(tmpdir(), `incur-config-${Date.now()}.json`)
+    writeFileSync(path, JSON.stringify({ ping: 'bad' }))
+
+    expect(() => Parser.parseConfig(path)).toThrow(
+      expect.objectContaining({ name: 'Incur.ParseError' }),
+    )
+    rmSync(path, { force: true })
   })
 })

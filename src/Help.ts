@@ -301,6 +301,7 @@ function globalOptionsLines(root = false): string[] {
   }
 
   const flags = [
+    { flag: '--config <path>', desc: 'Load command options from JSON config' },
     { flag: '--format <toon|json|yaml|md|jsonl>', desc: 'Output format' },
     { flag: '--help', desc: 'Show help' },
     { flag: '--llms', desc: 'Print LLM-readable manifest' },

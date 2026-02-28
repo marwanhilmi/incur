@@ -25,6 +25,7 @@ describe('formatCommand', () => {
         --limit <number>  Max PRs to return (default: 30)
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -42,6 +43,7 @@ describe('formatCommand', () => {
       Usage: tool ping
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -66,6 +68,7 @@ describe('formatCommand', () => {
         title  Title
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -95,6 +98,7 @@ describe('formatRoot', () => {
         issue list  List issues
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest
@@ -115,6 +119,7 @@ describe('formatRoot', () => {
         ping  Health check
 
       Global Options:
+        --config <path>                     Load command options from JSON config
         --format <toon|json|yaml|md|jsonl>  Output format
         --help                              Show help
         --llms                              Print LLM-readable manifest

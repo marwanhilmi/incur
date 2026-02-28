@@ -1,7 +1,7 @@
 import type { z } from 'zod'
 
 import type { FieldError } from './Errors.js'
-import { IncurError, ValidationError } from './Errors.js'
+import { IncurError, ParseError, ValidationError } from './Errors.js'
 import * as Formatter from './Formatter.js'
 import * as Help from './Help.js'
 import { detectRunner } from './internal/pm.js'
@@ -348,6 +348,7 @@ async function serveImpl(
     verbose,
     format: formatFlag,
     formatExplicit,
+    configPath,
     llms,
     mcp: mcpFlag,
     help,
@@ -675,7 +676,7 @@ async function serveImpl(
 
   // Resolve outputPolicy: command/group → CLI-level → default ('all')
   const effectiveOutputPolicy =
-    ('command' in resolved && resolved.outputPolicy) || options.outputPolicy
+    ('outputPolicy' in resolved ? resolved.outputPolicy : undefined) || options.outputPolicy
   const renderOutput = !(human && !formatExplicit && effectiveOutputPolicy === 'agent-only')
 
   function write(output: Output) {
@@ -737,6 +738,14 @@ async function serveImpl(
       args: command.args,
       options: command.options,
     })
+    const mergedOptions = mergeConfigOptions({
+      configPath,
+      parsedOptions: parsedOptions as Record<string, unknown>,
+      path,
+      rest,
+      schema: command.options,
+      alias: command.alias as Record<string, string> | undefined,
+    })
 
     const envSource = options.env ?? process.env
     const env = command.env ? Parser.parseEnv(command.env, envSource) : {}
@@ -757,7 +766,7 @@ async function serveImpl(
       agent: !human,
       args,
       env,
-      options: parsedOptions,
+      options: mergedOptions,
       ok: okFn,
       error: errorFn,
       var: varsMap,
@@ -993,13 +1002,14 @@ declare namespace serveImpl {
   }
 }
 
-/** @internal Extracts built-in flags (--verbose, --format, --json, --llms, --help, --version) from argv. */
+/** @internal Extracts built-in flags (--verbose, --format, --json, --config, --llms, --help, --version) from argv. */
 function extractBuiltinFlags(argv: string[]) {
   let verbose = false
   let llms = false
   let mcp = false
   let help = false
   let version = false
+  let configPath: string | undefined
   let format: Formatter.Format = 'toon'
   let formatExplicit = false
   const rest: string[] = []
@@ -1014,6 +1024,15 @@ function extractBuiltinFlags(argv: string[]) {
     else if (token === '--json') {
       format = 'json'
       formatExplicit = true
+    } else if (token.startsWith('--config=')) {
+      const value = token.slice('--config='.length)
+      if (!value) throw new ParseError({ message: 'Missing value for flag: --config' })
+      configPath = value
+    } else if (token === '--config') {
+      const value = argv[i + 1]
+      if (!value) throw new ParseError({ message: 'Missing value for flag: --config' })
+      configPath = value
+      i++
     } else if (token === '--format' && argv[i + 1]) {
       format = argv[i + 1] as Formatter.Format
       formatExplicit = true
@@ -1021,7 +1040,146 @@ function extractBuiltinFlags(argv: string[]) {
     } else rest.push(token)
   }
 
-  return { verbose, format, formatExplicit, llms, mcp, help, version, rest }
+  return { verbose, format, formatExplicit, configPath, llms, mcp, help, version, rest }
+}
+
+/** @internal Merges config-file options into parsed CLI options. */
+function mergeConfigOptions(options: {
+  configPath?: string | undefined
+  parsedOptions: Record<string, unknown>
+  path: string
+  rest: string[]
+  schema: z.ZodObject<any> | undefined
+  alias?: Record<string, string> | undefined
+}): Record<string, unknown> {
+  const { configPath, parsedOptions, path, rest, schema, alias } = options
+  if (!configPath || !schema) return parsedOptions
+
+  const config = Parser.parseConfig(configPath)
+  const entry = config[path]
+  if (!entry) return parsedOptions
+
+  const normalized = normalizeConfigOptions(path, entry, schema)
+  const fromConfig = Parser.parseOptions(schema, normalized) as Record<string, unknown>
+  const provided = collectProvidedOptionNames(rest, schema, alias)
+  const merged: Record<string, unknown> = { ...fromConfig }
+
+  for (const key of provided) if (key in parsedOptions) merged[key] = parsedOptions[key]
+
+  return Parser.parseOptions(schema, merged) as Record<string, unknown>
+}
+
+/** @internal Normalizes config option keys and rejects unknown options. */
+function normalizeConfigOptions(
+  command: string,
+  options: Record<string, unknown>,
+  schema: z.ZodObject<any>,
+): Record<string, unknown> {
+  const known = new Set(Object.keys(schema.shape))
+  const kebabToCamel = new Map<string, string>()
+  for (const name of known) {
+    const kebab = toKebab(name)
+    if (kebab !== name) kebabToCamel.set(kebab, name)
+  }
+
+  const normalized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(options)) {
+    const name = known.has(key) ? key : kebabToCamel.get(key)
+    if (!name)
+      throw new ParseError({
+        message: `Unknown option in config for '${command}': ${key}`,
+      })
+    normalized[name] = value
+  }
+
+  return normalized
+}
+
+/** @internal Collects option names explicitly provided in argv (excluding schema defaults). */
+function collectProvidedOptionNames(
+  argv: string[],
+  schema: z.ZodObject<any>,
+  alias: Record<string, string> | undefined,
+): Set<string> {
+  const provided = new Set<string>()
+  const known = new Set(Object.keys(schema.shape))
+  const aliasToName = new Map<string, string>()
+  if (alias) for (const [name, short] of Object.entries(alias)) aliasToName.set(short, name)
+
+  const kebabToCamel = new Map<string, string>()
+  for (const name of known) {
+    const kebab = toKebab(name)
+    if (kebab !== name) kebabToCamel.set(kebab, name)
+  }
+
+  let i = 0
+  while (i < argv.length) {
+    const token = argv[i]!
+
+    if (token.startsWith('--no-') && token.length > 5) {
+      const raw = token.slice(5)
+      const name = kebabToCamel.get(raw) ?? raw
+      if (known.has(name)) provided.add(name)
+      i++
+      continue
+    }
+
+    if (token.startsWith('--')) {
+      const eqIdx = token.indexOf('=')
+      if (eqIdx !== -1) {
+        const raw = token.slice(2, eqIdx)
+        const name = kebabToCamel.get(raw) ?? raw
+        if (known.has(name)) provided.add(name)
+        i++
+        continue
+      }
+
+      const raw = token.slice(2)
+      const name = kebabToCamel.get(raw) ?? raw
+      if (!known.has(name)) {
+        i++
+        continue
+      }
+      provided.add(name)
+      i += isBooleanOption(name, schema) ? 1 : 2
+      continue
+    }
+
+    if (token.startsWith('-') && token.length === 2) {
+      const short = token.slice(1)
+      const name = aliasToName.get(short)
+      if (!name || !known.has(name)) {
+        i++
+        continue
+      }
+      provided.add(name)
+      i += isBooleanOption(name, schema) ? 1 : 2
+      continue
+    }
+
+    i++
+  }
+
+  return provided
+}
+
+/** @internal Checks if an option's inner type is boolean. */
+function isBooleanOption(name: string, schema: z.ZodObject<any>): boolean {
+  const field = schema.shape[name]
+  if (!field) return false
+  return unwrapZod(field).constructor.name === 'ZodBoolean'
+}
+
+/** @internal Unwraps optional/default wrappers from a Zod schema. */
+function unwrapZod(schema: z.ZodType): z.ZodType {
+  let current = schema as any
+  while (current._zod?.def?.innerType) current = current._zod.def.innerType
+  return current
+}
+
+/** @internal Converts camelCase to kebab-case. */
+function toKebab(value: string): string {
+  return value.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
 }
 
 /** @internal Collects immediate child commands/groups for help output. */

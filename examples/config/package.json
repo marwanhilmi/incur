@@ -1,0 +1,14 @@
+{
+  "name": "config-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "config-demo": "node --import tsx cli.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  },
+  "dependencies": {
+    "incur": "workspace:*"
+  }
+}
