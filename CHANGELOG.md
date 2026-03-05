@@ -1,5 +1,13 @@
 # incur
 
+## 0.2.1
+
+### Patch Changes
+
+- 6ab9a33: Added `--filter-output` global option to filter output by key paths with support for dot notation and array slicing.
+- 2dc1b00: Added `--schema` global option to every command that returns its JSON Schema (args, env, options, output).
+- f5b0133: Added optional exitCode to c.error() and IncurError, allowing CLI authors to control the process exit code. Defaults to 1 when omitted (backward compatible).
+
 ## 0.2.0
 
 ### Minor Changes
